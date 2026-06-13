@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="demo.gif" alt="Simple TODO List demo">
+  <img src="https://raw.githubusercontent.com/bbjyzzwwy/Simple-TODO-List/master/demo.gif" alt="Simple TODO List demo">
 </p>
 
 ---
