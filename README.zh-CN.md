@@ -13,6 +13,10 @@
   <a href="https://github.com/bbjyzzwwy/Simple-TODO-List/blob/master/README.zh-CN.md">中文</a>
 </p>
 
+<p align="center">
+  <img src="demo.gif" alt="Simple TODO List 演示">
+</p>
+
 ---
 
 ## 功能
