@@ -1,0 +1,12 @@
+.vscode/**
+.vscode-test/**
+src/**
+tsconfig.json
+node_modules/**
+.gitignore
+*.vsix
+AGENTS.md
+CLAUDE.md
+.agents/**
+.codex/**
+.claude/**

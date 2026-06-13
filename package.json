@@ -1,0 +1,51 @@
+{
+  "name": "simple-todo-list",
+  "displayName": "Simple TODO List",
+  "description": "A simple TODO list with grouping, keyboard navigation, and webview UI",
+  "version": "0.1.0",
+  "publisher": "simple-todo-list",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bbjyzzwwy/Simple-TODO-List.git"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:simple-todo-list-treeview"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "simple-todo-list",
+          "title": "Simple TODO List",
+          "icon": "resources/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "simple-todo-list": [
+        {
+          "type": "webview",
+          "id": "simple-todo-list-treeview",
+          "name": "TODO List"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "typescript": "^5.0.0"
+  }
+}
