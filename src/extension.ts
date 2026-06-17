@@ -1,10 +1,48 @@
 import * as vscode from 'vscode';
+import type { TodoGroup, TodoItem, TodoState } from './types';
+
+declare function setInterval(handler: () => void, timeout?: number): unknown;
+declare function clearInterval(handle: unknown): void;
+
+const TODO_STATE_KEY = 'tiny-todo-list-state-v1';
+const SETTINGS_SYNC_NOW_COMMAND = 'workbench.userDataSync.actions.syncNow';
+const SETTINGS_SYNC_INTERVAL_MS = 5_000;
+const DEFAULT_TODO_STATE: TodoState = {
+  groups: [{ id: 'default', name: 'Default', collapsed: false }],
+  items: [],
+};
+
+type WebviewMessage = {
+  type?: string;
+  requestId?: number;
+  text?: string;
+  state?: unknown;
+};
+
+type RawTodoState = {
+  groups: unknown[];
+  items: unknown[];
+};
 
 /**
  * WebviewView provider — renders the TODO app directly in the sidebar.
  */
 class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
+  private stateWriteQueue: Thenable<void> = Promise.resolve();
+  private syncTimer: unknown;
+  private lastStateSnapshot = '';
+  private canRunSettingsSyncCommand = true;
+  private syncInFlight: Promise<void> | undefined;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  dispose(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = undefined;
+    }
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -21,17 +59,50 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message) => {
       void this.handleMessage(webviewView.webview, message);
     });
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        void this.syncAndRefreshState();
+      }
+    });
 
     webviewView.onDidDispose(() => {
       this.view = undefined;
     });
+
+    this.ensureSyncTimer();
+    void this.syncAndRefreshState();
   }
 
   private async handleMessage(
     webview: vscode.Webview,
-    message: { type?: string; requestId?: number; text?: string }
+    message: WebviewMessage
   ): Promise<void> {
     if (!message || typeof message.type !== 'string') {
+      return;
+    }
+
+    if (message.type === 'requestState') {
+      const savedState = this.context.globalState.get<unknown>(TODO_STATE_KEY);
+      const normalizedSavedState = normalizeTodoState(savedState);
+      const normalizedFallbackState = normalizeTodoState(message.state);
+      const hasSavedState = isTodoStateLike(savedState);
+      const shouldMigrateFallback =
+        isTodoStateLike(message.state) &&
+        hasMeaningfulTodoState(normalizedFallbackState) &&
+        (!hasSavedState || !hasMeaningfulTodoState(normalizedSavedState));
+      const state = shouldMigrateFallback ? normalizedFallbackState : normalizedSavedState;
+
+      if (shouldMigrateFallback) {
+        await this.saveTodoState(state);
+      }
+
+      this.lastStateSnapshot = serializeTodoState(state);
+      await webview.postMessage({ type: 'state', state });
+      return;
+    }
+
+    if (message.type === 'updateState') {
+      await this.saveTodoState(normalizeTodoState(message.state));
       return;
     }
 
@@ -47,6 +118,65 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
         requestId: message.requestId,
         text,
       });
+    }
+  }
+
+  private saveTodoState(state: TodoState): Thenable<void> {
+    this.lastStateSnapshot = serializeTodoState(state);
+    this.stateWriteQueue = this.stateWriteQueue.then(
+      () => this.context.globalState.update(TODO_STATE_KEY, state),
+      () => this.context.globalState.update(TODO_STATE_KEY, state)
+    );
+    return this.stateWriteQueue;
+  }
+
+  private ensureSyncTimer(): void {
+    if (this.syncTimer) {
+      return;
+    }
+
+    this.syncTimer = setInterval(() => {
+      void this.syncAndRefreshState();
+    }, SETTINGS_SYNC_INTERVAL_MS);
+  }
+
+  private async syncAndRefreshState(): Promise<void> {
+    if (this.syncInFlight) {
+      return this.syncInFlight;
+    }
+
+    this.syncInFlight = this.doSyncAndRefreshState();
+    try {
+      await this.syncInFlight;
+    } finally {
+      this.syncInFlight = undefined;
+    }
+  }
+
+  private async doSyncAndRefreshState(): Promise<void> {
+    await this.runSettingsSyncNow();
+
+    const state = normalizeTodoState(this.context.globalState.get<unknown>(TODO_STATE_KEY));
+    const snapshot = serializeTodoState(state);
+    if (snapshot === this.lastStateSnapshot) {
+      return;
+    }
+
+    this.lastStateSnapshot = snapshot;
+    await this.view?.webview.postMessage({ type: 'state', state });
+  }
+
+  private async runSettingsSyncNow(): Promise<void> {
+    if (!this.canRunSettingsSyncCommand) {
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand(SETTINGS_SYNC_NOW_COMMAND);
+    } catch (error) {
+      if (error instanceof Error && /command .* not found/i.test(error.message)) {
+        this.canRunSettingsSyncCommand = false;
+      }
     }
   }
 
@@ -383,13 +513,14 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
 
     // ── State ──
     const defaultState = { groups: [{ id: 'default', name: 'Default', collapsed: false }], items: [] };
-    const webviewStorageKey = 'tiny-todo-list-state-v1';
+    const webviewStorageKey = '${TODO_STATE_KEY}';
     let state = readSavedWebviewState();
     let currentTab = 'todo';
     let selectedItemIds = new Set();
     let lastClickedIndex = -1;
     let contextMenuState = null;
     let clipboardRequestSeq = 1;
+    let hasReceivedHostState = false;
     const pendingClipboardReads = {};
 
     // ── Persistence ──
@@ -441,10 +572,13 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
         return cloneState(defaultState);
       }
     }
-    function persistWebviewState() {
+    function persistWebviewState(syncToHost) {
       var snapshot = cloneState(state);
       vscode.setState(snapshot);
       localStorage.setItem(webviewStorageKey, JSON.stringify(snapshot));
+      if (syncToHost !== false && hasReceivedHostState) {
+        vscode.postMessage({ type: 'updateState', state: snapshot });
+      }
     }
 
     function scheduleSave() {
@@ -456,7 +590,18 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
     window.addEventListener('beforeunload', flushSave);
     window.addEventListener('message', function(event) {
       var message = event.data;
-      if (!message || message.type !== 'clipboardReadResult') return;
+      if (!message) return;
+
+      if (message.type === 'state') {
+        hasReceivedHostState = true;
+        state = normalizeState(message.state);
+        persistWebviewState(false);
+        selectedItemIds.clear();
+        render();
+        return;
+      }
+
+      if (message.type !== 'clipboardReadResult') return;
 
       var resolver = pendingClipboardReads[message.requestId];
       if (resolver) {
@@ -1125,11 +1270,72 @@ class TodoWebviewViewProvider implements vscode.WebviewViewProvider {
 
     document.getElementById('clearFinishedBtn').addEventListener('click', clearAllFinished);
 
+    vscode.postMessage({ type: 'requestState', state: cloneState(state) });
     render();
   </script>
 </body>
 </html>`;
   }
+}
+
+function isTodoStateLike(value: unknown): value is RawTodoState {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const maybeState = value as { groups?: unknown; items?: unknown };
+  return Array.isArray(maybeState.groups) && Array.isArray(maybeState.items);
+}
+
+function cloneTodoState(value: TodoState): TodoState {
+  return JSON.parse(JSON.stringify(value)) as TodoState;
+}
+
+function serializeTodoState(state: TodoState): string {
+  return JSON.stringify(state);
+}
+
+function hasMeaningfulTodoState(state: TodoState): boolean {
+  if (state.items.length > 0 || state.groups.length !== DEFAULT_TODO_STATE.groups.length) {
+    return true;
+  }
+
+  const [group] = state.groups;
+  const [defaultGroup] = DEFAULT_TODO_STATE.groups;
+  return group.id !== defaultGroup.id || group.name !== defaultGroup.name || group.collapsed !== defaultGroup.collapsed;
+}
+
+function normalizeTodoState(value: unknown): TodoState {
+  if (!isTodoStateLike(value)) {
+    return cloneTodoState(DEFAULT_TODO_STATE);
+  }
+
+  let groups: TodoGroup[] = value.groups
+    .filter((group): group is Record<string, unknown> => !!group && typeof group === 'object')
+    .map((group) => ({
+      id: typeof group.id === 'string' && group.id.length > 0 ? group.id : '',
+      name: typeof group.name === 'string' && group.name.length > 0 ? group.name : 'Untitled',
+      collapsed: !!group.collapsed,
+    }))
+    .filter((group) => group.id.length > 0);
+
+  if (groups.length === 0) {
+    groups = cloneTodoState(DEFAULT_TODO_STATE).groups;
+  }
+
+  const groupIds = new Set(groups.map((group) => group.id));
+  const items: TodoItem[] = value.items
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+    .map((item) => ({
+      id: typeof item.id === 'string' && item.id.length > 0 ? item.id : '',
+      text: typeof item.text === 'string' ? item.text : '',
+      completed: !!item.completed,
+      groupId: typeof item.groupId === 'string' && groupIds.has(item.groupId) ? item.groupId : groups[0].id,
+      createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+    }))
+    .filter((item) => item.id.length > 0);
+
+  return { groups, items };
 }
 
 function getNonce(): string {
@@ -1142,8 +1348,11 @@ function getNonce(): string {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const provider = new TodoWebviewViewProvider();
+  context.globalState.setKeysForSync([TODO_STATE_KEY]);
+
+  const provider = new TodoWebviewViewProvider(context);
   context.subscriptions.push(
+    provider,
     vscode.window.registerWebviewViewProvider('tiny-todo-list-treeview', provider, {
       webviewOptions: { retainContextWhenHidden: true },
     })

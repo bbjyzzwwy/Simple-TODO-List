@@ -18,7 +18,7 @@ export interface TodoGroup {
   collapsed: boolean;
 }
 
-/** The full application state persisted in the webview's local storage */
+/** The full application state persisted in globalState for Settings Sync */
 export interface TodoState {
   groups: TodoGroup[];
   items: TodoItem[];
