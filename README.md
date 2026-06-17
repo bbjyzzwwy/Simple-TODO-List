@@ -23,6 +23,7 @@
 
 - **Sidebar TODO list** — Open your tasks from the VS Code Activity Bar without leaving the editor.
 - **Grouped tasks** — Organize TODOs into collapsible groups with item counts.
+- **Cross-device sync** — Sync TODOs through VS Code Settings Sync with automatic refresh.
 
 
 ## Usage

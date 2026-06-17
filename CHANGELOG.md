@@ -2,6 +2,12 @@
 
 All notable changes to Tiny TODO List are documented in this file.
 
+## [0.1.1] - 2026-06-18
+
+### Added
+
+- Cross-device TODO sync via VS Code Settings Sync, with automatic refresh.
+
 ## [0.1.0] - 2026-06-14
 
 ### Added
@@ -19,6 +25,12 @@ All notable changes to Tiny TODO List are documented in this file.
 # 更新日志
 
 Tiny TODO List 的重要变更都会记录在此文件中。
+
+## [0.1.1] - 2026-06-18
+
+### 新增
+
+- 通过 VS Code Settings Sync 支持跨设备 TODO 同步，并自动刷新。
 
 ## [0.1.0] - 2026-06-14
 
