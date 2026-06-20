@@ -2,7 +2,7 @@
   "name": "tiny-todo-list",
   "displayName": "Tiny TODO List",
   "description": "A simple TODO list with grouping, keyboard navigation, and webview UI",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "bbjyzzwwy",
   "author": "bbjyzzwwy",
   "icon": "resources/icon.png",
